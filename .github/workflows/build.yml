@@ -1,66 +1,151 @@
 name: Build IPA with Fake Signing
 
 on:
-    push:
-        branches: [main] # Or your default branch
-    workflow_dispatch: # Allows manual triggering
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
-    build:
-        runs-on: macos-latest # Use the latest macOS runner
+  build:
+    runs-on: macos-latest
 
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-            - name: Install ldid
-              run: brew install ldid
+      - name: Install ldid
+        run: brew install ldid
 
-            - name: Select Xcode version
-              run: sudo xcode-select -s /Applications/Xcode_16.2.app
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
 
-            - name: Build App
-              run: |
-                xcodebuild build \
-                  -project StosVPN.xcodeproj \
-                  -scheme StosVPN \
-                  -destination 'generic/platform=iOS' \
-                  -configuration Release \
-                  CODE_SIGN_IDENTITY="" \
-                  CODE_SIGNING_REQUIRED=NO \
-                  CODE_SIGNING_ALLOWED=NO
+      - name: Build for iOS Device
+        run: |
+          xcodebuild build \
+            -project StosVPN.xcodeproj \
+            -scheme StosVPN \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_BITCODE=NO
 
-            - name: Create Payload directory
-              run: mkdir -p Payload
+      - name: Find Built App
+        run: |
+          find build -name "StosVPN.app" -type d
+          find build -name "*.appex" -type d
 
-            - name: Copy App to Payload
-              run: cp -R build/StosVPN.xcarchive/Products/Applications/StosVPN.app Payload/StosVPN.app
+      - name: Create Payload Structure
+        run: |
+          mkdir -p Payload
+          APP_PATH=$(find build -name "StosVPN.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: StosVPN.app not found"
+            exit 1
+          fi
+          cp -R "$APP_PATH" Payload/
+          echo "App copied from: $APP_PATH"
 
-            - name: Find and Sign App Extension
-              run: |
-                  APPEX_PATH=$(find Payload/StosVPN.app/PlugIns -name "*.appex" | head -n 1)
-                  if [ -z "$APPEX_PATH" ]; then
-                    echo "Error: App Extension (.appex) not found in PlugIns directory."
-                    exit 1
-                  fi
-                  echo "Found App Extension at: $APPEX_PATH"
-                  # Use the specific entitlements for the extension
-                  ldid -S"${GITHUB_WORKSPACE}/TunnelProv/TunnelProv.entitlements" "$APPEX_PATH/$(basename "$APPEX_PATH" .appex)"
-                  echo "Signed App Extension."
+      - name: Create Basic Entitlements (if missing)
+        run: |
+          # Create minimal entitlements for main app
+          cat > StosVPN.entitlements << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>application-identifier</key>
+              <string>com.stossy11.StosVPN</string>
+              <key>get-task-allow</key>
+              <false/>
+              <key>keychain-access-groups</key>
+              <array>
+                  <string>com.stossy11.StosVPN</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
 
-            - name: Sign Main App Bundle
-              run: |
-                  APP_BINARY_PATH="Payload/StosVPN.app/StosVPN"
-                  # Use the specific entitlements for the main app
-                  ldid -S"${GITHUB_WORKSPACE}/StosVPN/StosVPN.entitlements" "$APP_BINARY_PATH"
-                  echo "Signed Main App Bundle."
+          # Create minimal entitlements for tunnel provider
+          cat > TunnelProv.entitlements << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>application-identifier</key>
+              <string>com.stossy11.StosVPN.TunnelProv</string>
+              <key>get-task-allow</key>
+              <false/>
+              <key>keychain-access-groups</key>
+              <array>
+                  <string>com.stossy11.StosVPN.TunnelProv</string>
+              </array>
+              <key>com.apple.developer.networking.networkextension</key>
+              <array>
+                  <string>packet-tunnel-provider</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
 
-            - name: Create IPA
-              run: |
-                  zip -r ./StosVPN-fakesigned.ipa Payload
+      - name: Sign App Extension
+        run: |
+          APPEX_PATH=$(find Payload/StosVPN.app -name "*.appex" -type d | head -1)
+          if [ -n "$APPEX_PATH" ]; then
+            echo "Found App Extension at: $APPEX_PATH"
+            APPEX_BINARY="$APPEX_PATH/$(basename "$APPEX_PATH" .appex)"
+            if [ -f "$APPEX_BINARY" ]; then
+              ldid -STunnelProv.entitlements "$APPEX_BINARY"
+              echo "Signed App Extension: $APPEX_BINARY"
+            else
+              echo "App Extension binary not found at: $APPEX_BINARY"
+            fi
+          else
+            echo "No App Extension found, skipping..."
+          fi
 
-            - name: Upload IPA Artifact
-              uses: actions/upload-artifact@v4
-              with:
-                  name: StosVPN-IPA.ipa
-                  path: StosVPN-fakesigned.ipa
+      - name: Sign Main App
+        run: |
+          APP_BINARY="Payload/StosVPN.app/StosVPN"
+          if [ -f "$APP_BINARY" ]; then
+            ldid -SStosVPN.entitlements "$APP_BINARY"
+            echo "Signed Main App: $APP_BINARY"
+          else
+            echo "Main app binary not found at: $APP_BINARY"
+            find Payload/StosVPN.app -type f
+            exit 1
+          fi
+
+      - name: Verify Signing
+        run: |
+          echo "=== Main App ==="
+          ldid -e Payload/StosVPN.app/StosVPN || echo "Main app not signed properly"
+          
+          APPEX_PATH=$(find Payload/StosVPN.app -name "*.appex" -type d | head -1)
+          if [ -n "$APPEX_PATH" ]; then
+            echo "=== App Extension ==="
+            APPEX_BINARY="$APPEX_PATH/$(basename "$APPEX_PATH" .appex)"
+            ldid -e "$APPEX_BINARY" || echo "App extension not signed properly"
+          fi
+
+      - name: Create IPA
+        run: |
+          zip -qr StosVPN-fakesigned.ipa Payload
+          echo "IPA created: StosVPN-fakesigned.ipa"
+          ls -la *.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StosVPN-IPA
+          path: StosVPN-fakesigned.ipa
+
+      - name: Upload Debug Info
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Debug-Info
+          path: |
+            build
+            Payload
