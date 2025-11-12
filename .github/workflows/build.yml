@@ -19,16 +19,16 @@ jobs:
             - name: Select Xcode version
               run: sudo xcode-select -s /Applications/Xcode_16.2.app
 
-            - name: Build Xcode Archive
+            - name: Build App
               run: |
-                  xcodebuild archive \
-                    -project StosVPN.xcodeproj \
-                    -scheme StosVPN \
-                    -destination 'generic/platform=iOS' \
-                    -archivePath build/StosVPN.xcarchive \
-                    CODE_SIGN_IDENTITY="" \
-                    CODE_SIGNING_REQUIRED=NO \
-                    CODE_SIGNING_ALLOWED=NO
+                xcodebuild build \
+                  -project StosVPN.xcodeproj \
+                  -scheme StosVPN \
+                  -destination 'generic/platform=iOS' \
+                  -configuration Release \
+                  CODE_SIGN_IDENTITY="" \
+                  CODE_SIGNING_REQUIRED=NO \
+                  CODE_SIGNING_ALLOWED=NO
 
             - name: Create Payload directory
               run: mkdir -p Payload
