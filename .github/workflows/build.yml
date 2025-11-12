@@ -19,6 +19,12 @@ jobs:
       - name: Select Xcode version
         run: sudo xcode-select -s /Applications/Xcode_16.2.app
 
+      - name: Remove Preview Content (Fix Asset Catalog)
+        run: |
+          # Remove Preview Assets that cause build failures
+          rm -rf "StosVPN/Preview Content"
+          echo "Preview Content removed"
+
       - name: Build for iOS Device
         run: |
           xcodebuild build \
@@ -30,12 +36,8 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            ENABLE_BITCODE=NO
-
-      - name: Find Built App
-        run: |
-          find build -name "StosVPN.app" -type d
-          find build -name "*.appex" -type d
+            ENABLE_BITCODE=NO \
+            ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSION_SYMBOLS=NO
 
       - name: Create Payload Structure
         run: |
@@ -43,12 +45,13 @@ jobs:
           APP_PATH=$(find build -name "StosVPN.app" -type d | head -1)
           if [ -z "$APP_PATH" ]; then
             echo "Error: StosVPN.app not found"
+            find build -type d -name "*.app"
             exit 1
           fi
           cp -R "$APP_PATH" Payload/
           echo "App copied from: $APP_PATH"
 
-      - name: Create Basic Entitlements (if missing)
+      - name: Create Basic Entitlements
         run: |
           # Create minimal entitlements for main app
           cat > StosVPN.entitlements << EOF
@@ -118,18 +121,6 @@ jobs:
             exit 1
           fi
 
-      - name: Verify Signing
-        run: |
-          echo "=== Main App ==="
-          ldid -e Payload/StosVPN.app/StosVPN || echo "Main app not signed properly"
-          
-          APPEX_PATH=$(find Payload/StosVPN.app -name "*.appex" -type d | head -1)
-          if [ -n "$APPEX_PATH" ]; then
-            echo "=== App Extension ==="
-            APPEX_BINARY="$APPEX_PATH/$(basename "$APPEX_PATH" .appex)"
-            ldid -e "$APPEX_BINARY" || echo "App extension not signed properly"
-          fi
-
       - name: Create IPA
         run: |
           zip -qr StosVPN-fakesigned.ipa Payload
@@ -141,11 +132,3 @@ jobs:
         with:
           name: StosVPN-IPA
           path: StosVPN-fakesigned.ipa
-
-      - name: Upload Debug Info
-        uses: actions/upload-artifact@v4
-        with:
-          name: Build-Debug-Info
-          path: |
-            build
-            Payload
